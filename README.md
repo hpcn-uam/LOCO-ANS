@@ -26,7 +26,7 @@ A quick test can be run using the BASH script under the Test folder.
 To run the test, the codec and auxiliary tools need to be built (run `make` in the repo root)
 
 Prerequisites:
-- OpenCV C++ lib and dev files (any version >=2.4 should be fine)
+- [OpenCV C++ lib and dev files (any version >=2.4 should be fine)](https://opencv.org/releases/)
 
 
 ## Results using [Rawzor dataset](https://imagecompression.info/test_images/)
