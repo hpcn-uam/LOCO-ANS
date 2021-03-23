@@ -2,6 +2,9 @@
 
 This repository contains the source code resulting from the development of an ANS based coder for JPEG-LS.
 
+When targeting the [Rawzor dataset](https://imagecompression.info/test_images/), the LOCO-ANS  achieves in mean up to 1.3\% bits per pixel reduction for lossless coding and 4.8\% for a maximum peak error set to 1, compared to JPEG-LS.
+These gains continue to increase with the maximum peak error, showing in mean a 25\% better compression for a peak error set to 10. 
+When considering only non-synthetic images, these improvement increase to 1.4\%, 5.8\% and 36.8\% for peak errors of 0, 1 and 10, respectively .
 ## Publication
 This work has an associated publication (currently under revision):
 
