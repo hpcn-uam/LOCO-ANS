@@ -23,7 +23,7 @@ image_dataset/gray8bit:  image_dataset/gray8bit.zip
 	unzip gray8bit.zip -d gray8bit
 
 clean:
-	rm image_dataset/gray8bit.zip
+	rm -rf image_dataset/gray8bit.zip
 
 distclean:
 	rm -rf image_dataset
