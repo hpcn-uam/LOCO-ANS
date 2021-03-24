@@ -66,8 +66,8 @@ int prediction_errors[512]={0};
         const int MIN_REDUCT_ERROR = -near;
         const int MAX_REDUCT_ERROR =  MAXVAL + near;
         const int DECO_RANGE = alpha * delta;               
-        const int MIN_ERROR = -std::floor(alpha/2);
-        const int MAX_ERROR =  std::ceil(alpha/2) -1;
+        const int MIN_ERROR = -std::floor(alpha/2.0);
+        const int MAX_ERROR =  std::ceil(alpha/2.0) -1;
       #endif
       const int remainder_reduct_bits = std::floor(std::log2(float(delta)));
       const int chn=0;
