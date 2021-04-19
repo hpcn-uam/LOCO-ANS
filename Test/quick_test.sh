@@ -4,6 +4,25 @@ RED="\e[31m"
 GREEN="\e[32m"
 NC="\e[0m"
 
+DEF_COLOR="\e[39m"
+MSJ_COLOR="\e[32m"
+WAR_COLOR="\e[33m"
+ERR_COLOR="\e[31m"
+Print_Msg(){
+  time=$(date|awk '{print $4}')
+  echo -e " ${time}: ${MSJ_COLOR} $@ ${DEF_COLOR}"
+}
+
+Print_War(){
+ time=$(date|awk '{print $4}')
+  echo -e " ${time}: ${WAR_COLOR} $@ ${DEF_COLOR}"
+}
+
+Print_Err(){
+  time=$(date|awk '{print $4}')
+  echo -e " ${time}: ${ERR_COLOR} $@ ${DEF_COLOR}"
+}
+
 REPO_ROOT=$(git rev-parse --show-toplevel)
 CODEC="${REPO_ROOT}/codec/loco_ans_codec"
 
