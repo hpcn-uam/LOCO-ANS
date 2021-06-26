@@ -22,10 +22,6 @@
 #ifndef CORE_ANALYSIS_UTILS_H
 #define CORE_ANALYSIS_UTILS_H
 
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
-
 #include "codec_core.h"
 #include "img_proc_utils.h"
 #include "context.h"
@@ -33,8 +29,8 @@
 
 std::array<double, CTX_BINS> ctx_code_bit_acc={0};
 
-double theoretical_bits = 0;
-double theoretical_entropy = 0;
+long double theoretical_bits = 0;
+long double theoretical_entropy = 0;
 
 float kld_minimizing_rec_value(float l,float h){
   const float C = log2(1-l) - log2(1-h) + l/(1-l)*log2(l) - h/(1-h)*log2(h);
@@ -66,9 +62,11 @@ float get_St_rec_value(int idx, int context){
   float St_rx = theta_rx/(1-theta_rx);
 
   // verification 
+  #if ITERATIVE_ST
     assert(idx ==0 || low_b<=(ctx_St[context]/float(CTX_ST_FACTOR))/((float) ctx_cnt[context]));
-    assert((ctx_St[context]/float(CTX_ST_FACTOR))/((float) ctx_cnt[context])<=high_b+.01);
-
+    assert((ctx_St[context]/float(CTX_ST_FACTOR))/((float) ctx_cnt[context])<=high_b+.01 || 
+                idx == MAX_ST_IDX);
+  #endif
   assert(low_b<=St_rx);
   assert(St_rx<=high_b);
 
@@ -84,7 +82,7 @@ void estimate_entropy(ee_symb_data symbol,Context_t context,int near  ){
   float Nt  =  (ctx_p_idx[context.id]*t + ctx_Nt[context.id])/float(CTX_NT_FACTOR);
 
   //y entropy
-  double y_beta_a = .5; //.5/(1+near/2);
+  double y_beta_a = .5;
   double y_beta_b = .5; 
   double p =  (Nt+ y_beta_a)/(t+ y_beta_b + y_beta_a);
   double y_prob = symbol.y == 1? p:1-p;

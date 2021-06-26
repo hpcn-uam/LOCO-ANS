@@ -26,8 +26,6 @@
 #include <assert.h>
 
 #include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
 
 #include <stdint.h>
 #include <iostream>
@@ -37,21 +35,29 @@
 #include <cmath>
 #include <cstring> //memcopy
 
-#define ANALYSIS_CODE true
+#include "coder_config.h"
+
+constexpr int MAX_IBPP = 8;
 #define ERROR_REDUCTION true
 #define Orig_CTX_Quant false
-#define MAX_SUPPORTED_BPP 16 // has to be mult of 8
-#define INPUT_BPP 8
-const int MAXVAL = pow(2,INPUT_BPP)-1;
+#define MU_estim_like_original false
+#define MAX_SUPPORTED_BPP (32) // has to be mult of 8
 
-#if ERROR_REDUCTION
-  #define EE_REMAINDER_SIZE (INPUT_BPP-1)
-#else
-  #define EE_REMAINDER_SIZE (INPUT_BPP)
-#endif
+// SYMBOL_ENDIANNESS_LITTLE:
+// packs of bits stored in little endian
+// new packs are assigned to less significant bits 
+// SYMBOL_ENDIANNESS_LITTLE has precedence over BIT_ENDIANNESS_LITTLE
+#define SYMBOL_ENDIANNESS_LITTLE true 
 
-#define DEBUG_ENC false
-#define DEBUG_DEC false
+// BIT_ENDIANNESS_LITTLE:
+// packs of bits stored in big endian
+// new packs are assigned to less significant bits 
+#define BIT_ENDIANNESS_LITTLE false
+
+// #define DEBUG_ENC false
+// #define DEBUG_DEC false
+
+#define USING_DIV_RED_LUT 1
 
 #define CHROMA_MODE_GRAY 0
 #define CHROMA_MODE_YUV420 1
@@ -59,9 +65,7 @@ const int MAXVAL = pow(2,INPUT_BPP)-1;
 #define CHROMA_MODE_YUV444 3
 #define CHROMA_MODE_BAYER 4
 
-#define QUANT_IDX_OFFSET 128
-#define DISCARTED_IDX (2*QUANT_IDX_OFFSET-1)
-#define CHN_TO_ANALIZE 0
+#define ITERATIVE_ST false
 
 
 #define DBG_INFO "FILE: "<<__FILE__<<". FUNC: "<<__func__<<". LINE: "<<__LINE__<<". "
@@ -73,11 +77,7 @@ const int MAXVAL = pow(2,INPUT_BPP)-1;
 #define ENCODER_MODE_ENCODE 0
 #define ENCODER_MODE_SYSTEM_TEST 1
 
-#define ENCODER_PRED_LHE 0 
-#define ENCODER_PRED_LOCO 1
-#define ENCODER_PRED_GAP   2
-#define ENCODER_PRED_GAP_2 3
-#define ENCODER_PRED_SIMPLE_GAP 4
+#define ENCODER_PRED_LOCO 0
 
 
 uint32_t encode_core(const cv::Mat& src,
@@ -87,13 +87,14 @@ uint32_t encode_core(const cv::Mat& src,
                           char _fixed_prediction_alg = ENCODER_PRED_LOCO, // not currently in use
                           int near = 1, 
                           char encoder_mode=0, 
-                          std::string csv_prefix= std::string());
+                          int ibpp=8);
 
 void decode_core(unsigned char* in_file ,cv::Mat& decode_img,
                         char chroma_mode=CHROMA_MODE_YUV444, 
                         char _fixed_prediction_alg = ENCODER_PRED_LOCO, // not currently in use
                         int near = 1,  
                         uint ee_buffer_size = 2096,
+                        int ibpp=8,
                         char mode =0);
 
 void rgb2yuv(const cv::Mat& src,cv::Mat&  dst,char chroma_mode =CHROMA_MODE_YUV444);
@@ -108,49 +109,77 @@ struct Context_t{
   Context_t(int _id, int _sign):id(_id),sign(_sign){}
 };
 
+
+#if ADD_GRAD_4
+  constexpr int extra_cols_before = 2;
+#else
+  constexpr int extra_cols_before = 1;
+#endif
+
+constexpr int extra_cols_after = 1;
+constexpr int extra_cols= extra_cols_before + extra_cols_after;
+constexpr int col_idx_off = extra_cols_before;
+
 class RowBuffer
   {
   public:
     int cols;
     int curr_row_idx;
-    unsigned char * prev_row;
-    unsigned char * current_row;
+    unsigned int * prev_row;
+    unsigned int * current_row;
+
     RowBuffer(int _cols):cols(_cols),curr_row_idx(0){
-      prev_row = new unsigned char[_cols+2];
-      current_row = new unsigned char[_cols+2];
-      for(int i = 0; i < _cols+2; ++i) {
+      prev_row = new unsigned int[_cols+extra_cols];
+      current_row = new unsigned int[_cols+extra_cols];
+      for(int i = 0; i < _cols+extra_cols; ++i) {
         prev_row[i]= 0;
         current_row[i]= 0;
       }
     };
-    inline unsigned char retrieve(int row,int col) const{
+    inline unsigned int retrieve(int row,int col) const{
       int row_idx= row&0x1;
       if(row_idx == curr_row_idx) {
-        return current_row[col+1];
+        return current_row[col+col_idx_off];
       }else{
-        return prev_row[col+1];
+        return prev_row[col+col_idx_off];
       }
     }
-    inline void update(unsigned char px,int col){
-      current_row[col+1] =px; 
-      current_row[col+2] =px; 
+    inline void update(unsigned int px,int col){
+      current_row[col+col_idx_off] =px; 
     }
-    void start_row(){
-      current_row[0]= prev_row[1];
+    inline void start_row(){
+      /*for(unsigned i = 0; i < extra_cols_before; ++i) {
+        current_row[i]= prev_row[extra_cols_before];
+      }*/
     }
 
-    void end_row(){
-      unsigned char * aux = prev_row;
+    inline void end_row(){
+      // copy last sample to extra col on the right 
+      current_row[cols+col_idx_off] =current_row[cols-1+col_idx_off]; 
+
+      // swap row pointers
+      unsigned int * aux = prev_row;
       prev_row = current_row;
       current_row = aux;
       curr_row_idx = curr_row_idx?1:0;
+
+      for(unsigned i = 0; i < extra_cols_before; ++i) {
+        current_row[i]= prev_row[extra_cols_before];
+      }
+
     }
-    void get_teplate(int col,
+    inline void get_teplate(int col,
                     int &a,int &b,int &c,int &d) const{
-      a = current_row[col];
-      b = prev_row[col+1];
-      c = prev_row[col];
-      d = prev_row[col+2];
+      a = current_row[col+col_idx_off-1];
+      b = prev_row[col+col_idx_off];
+      c = prev_row[col+col_idx_off-1];
+      d = prev_row[col+col_idx_off+1];
+    }
+
+    inline void get_teplate(int col,
+                    int &a,int &b,int &c,int &d,int &e) const{
+      get_teplate( col, a, b, c, d);
+      e = current_row[col+col_idx_off-2];
     }
 
     ~RowBuffer(){
@@ -164,14 +193,20 @@ class RowBuffer
 
 struct ee_symb_data {
   ee_symb_data():z(0),y(0),remainder_reduct_bits(0),theta_id(0),p_id(0){}
-  int32_t z;
-  int32_t y;
-  int32_t remainder_reduct_bits; //reminder_bits =  EE_REMAINDER_SIZE - remainder_reduct_bits
-  int32_t theta_id;
-  int32_t p_id;
+  uint16_t z;
+  uint8_t y;
+  uint8_t remainder_reduct_bits; //reminder_bits =  EE_REMAINDER_SIZE - remainder_reduct_bits
+  uint16_t theta_id;
+  uint16_t p_id;
+
+  // int32_t z;
+  // int32_t theta_id;
+  // int32_t p_id;
+  // int32_t y;
+  // int32_t remainder_reduct_bits; //reminder_bits =  EE_REMAINDER_SIZE - remainder_reduct_bits
+
 
 }__attribute__((packed));
-
 
 
 #endif /* CODEC_CORE_H */

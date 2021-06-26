@@ -25,7 +25,7 @@
 #include "codec_core.h"
 #include "context.h"
 #include "img_proc_utils.h"
-#include "coder_config.h"
+
 
 // #define EE_BUFFER_SIZE (2048)
 #define STACK_SIZE (EE_BUFFER_SIZE* int(MAX_SUPPORTED_BPP/8))
@@ -43,10 +43,26 @@
 const int tANS_STATE_SIZE = std::log2(NUM_ANS_STATES) ; 
 const int tANS_STATE_MASK = (0xFFFF >> (16-tANS_STATE_SIZE));
 
-typedef uint32_t bit_buffer_t;
-typedef uint8_t binary_stack_t;
+#if BIT_ENDIANNESS_LITTLE ||SYMBOL_ENDIANNESS_LITTLE
+  #if ARCH == 32
+    typedef uint32_t bit_buffer_t;
+    typedef uint16_t binary_stack_t;
+    #define BIT_BUFFER_SIZE 16 // 8*sizeof(binary_stack_t);
+  #else
+    typedef uint64_t bit_buffer_t;
+    typedef uint32_t binary_stack_t;
+    #define BIT_BUFFER_SIZE 32 //8*sizeof(binary_stack_t);
+  #endif
+#else
+  typedef uint32_t bit_buffer_t;
+  typedef uint8_t binary_stack_t;
+  #define BIT_BUFFER_SIZE  8// 8*sizeof(binary_stack_t);
+#endif 
+// typedef uint8_t binary_stack_t;
 
 struct tANS_ROM_element_t {
+  // int16_t next_state;
+  // int16_t bits;
   int8_t next_state;
   int8_t bits;
 } ;
@@ -72,7 +88,8 @@ class Symbol_Coder
 
   private:
     uint symbols_in_buffer ;
-    std::vector<ee_symb_data> entropy_encoder_buffer;
+    // std::vector<ee_symb_data> entropy_encoder_buffer;
+    std::array<ee_symb_data,EE_BUFFER_SIZE> entropy_encoder_buffer;
 
     // ANS
     uint ANS_encoder_state ; // = ANS_I_RANGE_START & tANS_STATE_MASK
@@ -86,21 +103,22 @@ class Symbol_Coder
     binary_stack_t encoded_bit_stack[STACK_SIZE];
     bit_buffer_t bit_buffer;
     uint bit_ptr ;
-    const uint BIT_BUFFER_SIZE = 8*sizeof(binary_stack_t);
+    // const uint BIT_BUFFER_SIZE = 8*sizeof(binary_stack_t);
+
+    int EE_REMAINDER_SIZE;
     
     
   public:
   // if using the default constructor, set_out_bitfile needs to be called before 
   // coding
   Symbol_Coder():symbols_in_buffer(0),ANS_encoder_state(0),geometric_coder_iters(0)
-            ,file_size(0) , stack_ptr(STACK_PTR_INIT),bit_buffer(0),bit_ptr(0){
-    entropy_encoder_buffer.reserve(EE_BUFFER_SIZE);
+            ,file_size(0) , stack_ptr(STACK_PTR_INIT),bit_buffer(0),bit_ptr(0),EE_REMAINDER_SIZE(7){
+    // entropy_encoder_buffer.reserve(EE_BUFFER_SIZE);
   }
 
-  Symbol_Coder(uint8_t *_out_file):symbols_in_buffer(0),ANS_encoder_state(0),geometric_coder_iters(0)
-            ,out_file(_out_file),file_size(0) , stack_ptr(STACK_PTR_INIT),bit_buffer(0),bit_ptr(0){
-    entropy_encoder_buffer.reserve(EE_BUFFER_SIZE);
-
+  Symbol_Coder(uint8_t *_out_file,int _EE_REMAINDER_SIZE):symbols_in_buffer(0),ANS_encoder_state(0),geometric_coder_iters(0)
+            ,out_file(_out_file),file_size(0) , stack_ptr(STACK_PTR_INIT),bit_buffer(0),bit_ptr(0),EE_REMAINDER_SIZE(_EE_REMAINDER_SIZE){
+    // entropy_encoder_buffer.reserve(EE_BUFFER_SIZE);
 
    // TODO: support mac iterations as argument
     //get max iterations and compute the max_module_per_cardinality_table
@@ -132,9 +150,15 @@ class Symbol_Coder
   }
   
 
-  void store_pixel(unsigned char pixel){
-    symbols_in_buffer ++; // count in order to have always the same encode block size
-    write_byte_in_binary(pixel);
+  void store_pixel(unsigned int pixel, int bits){
+    // symbols_in_buffer ++; // count in order to have always the same encode block size
+    assert(bits<=16);
+    if(bits <=8) {
+      write_byte_in_binary(pixel);
+    }else {
+      write_byte_in_binary((pixel)&0xFF);
+      write_byte_in_binary((pixel>>8)&0xFF);
+    }
     if(unlikely(symbols_in_buffer >= EE_BUFFER_SIZE)) {
       std::cerr<<"Warning: Coder symbol buffer is full after storing pixel value" <<std::endl;
     }
@@ -142,8 +166,9 @@ class Symbol_Coder
 
    
   void push_symbol(ee_symb_data symbol ){
+    entropy_encoder_buffer[symbols_in_buffer]=symbol;
+    // entropy_encoder_buffer.push_back(symbol);
     symbols_in_buffer ++;
-    entropy_encoder_buffer.push_back(symbol);
 
     if(unlikely(symbols_in_buffer >= EE_BUFFER_SIZE)) {
       code_symbol_buffer();
@@ -152,44 +177,49 @@ class Symbol_Coder
   }
 
   void code_symbol_buffer(){
-    if(likely( symbols_in_buffer != 0)) { // OPT !entropy_encoder_buffer.empty() does the job
-      while(!entropy_encoder_buffer.empty()){
-        ee_symb_data symb_data = entropy_encoder_buffer.back();
-        entropy_encoder_buffer.pop_back();
-        Bernoulli_coder(symb_data);// encode y
-        geometric_coder(symb_data); // encode z 
-      }
-
-      tANS_store_state();
-      store_binary_stack(); //go to next byte
-      symbols_in_buffer = 0;
-
+    // if(likely( symbols_in_buffer != 0)) { 
+    while(symbols_in_buffer){
+      symbols_in_buffer--;
+    // while(!entropy_encoder_buffer.empty()){
+      ee_symb_data symb_data = entropy_encoder_buffer[symbols_in_buffer];
+      // ee_symb_data symb_data = entropy_encoder_buffer.back();
+      // entropy_encoder_buffer.pop_back();
+      Bernoulli_coder(symb_data);// encode y
+      geometric_coder(symb_data); // encode z 
     }
+
+    tANS_store_state();
+    store_binary_stack(); //go to next byte
+    // symbols_in_buffer = 0;
+
+    // }
 
   }
 
 private:
   void Bernoulli_coder(ee_symb_data symbol){
-      static const tANS_table_t tANS_y_encode_table[NUM_ANS_P_MODES][NUM_ANS_STATES][2]{
+
+    static const tANS_table_t tANS_y_encode_table[NUM_ANS_P_MODES][NUM_ANS_STATES][2]{
       #include "ANS_tables/tANS_y_encoder_table.dat"
     }; // [0] number of bits, [1] next state
 
-    if(unlikely(symbol.p_id >= CTX_NT_HALF_IDX)) {
-      #if CTX_NT_CENTERED_QUANT
-        if(symbol.p_id == CTX_NT_HALF_IDX) {
-          push_bits_to_binary_stack( symbol.y,1);
-          return;
-        }
-        symbol.p_id = CTX_NT_QUANT_BINS - symbol.p_id;
-      #else
-        symbol.p_id = CTX_NT_QUANT_BINS-1 - symbol.p_id;
-      #endif
-      symbol.y = symbol.y == 0?1:0;
-    }
+    #if !HALF_Y_CODER
+      if(unlikely(symbol.p_id >= CTX_NT_HALF_IDX)) {
+        #if CTX_NT_CENTERED_QUANT
+          if(symbol.p_id == CTX_NT_HALF_IDX) {
+            push_single_bit_to_binary_stack( symbol.y);
+            return;
+          }
+          symbol.p_id = CTX_NT_QUANT_BINS - symbol.p_id;
+        #else
+          symbol.p_id = CTX_NT_QUANT_BINS-1 - symbol.p_id;
+        #endif
+        symbol.y = symbol.y == 0?1:0;
+      }
+    #endif
     
     auto current_y_ANS_table = tANS_y_encode_table[symbol.p_id];
     tANS_encode_bernulli(current_y_ANS_table, symbol.y);
-
   }
 
   void geometric_coder(ee_symb_data symbol){
@@ -237,7 +267,11 @@ private:
     #if tANS_STATE_SIZE+1 > 8
     #error The bit buffer stores upto 8 bits. binary stack should use a type with more bits, but just changing the type causes endianness problems and/or others
     #else
-    push_bits_to_binary_stack(ANS_encoder_state +NUM_ANS_STATES ,tANS_STATE_SIZE+1);
+      #if SYMBOL_ENDIANNESS_LITTLE
+      push_bits_to_binary_stack((ANS_encoder_state<<1) +1 ,tANS_STATE_SIZE+1);
+      #else
+      push_bits_to_binary_stack(ANS_encoder_state +NUM_ANS_STATES ,tANS_STATE_SIZE+1);
+      #endif
     #endif
     ANS_encoder_state = 0; // = ANS_I_RANGE_START & tANS_STATE_MASK
   }
@@ -246,24 +280,28 @@ private:
     const int num_of_bits = tANS_encode_table[ANS_encoder_state][symbol].bits;
     assert(num_of_bits >= 0);
 
+
+    // if(num_of_bits) {
     const uint BIT_MASK = (1<<num_of_bits)-1;
     push_bits_to_binary_stack( ANS_encoder_state & BIT_MASK,num_of_bits);
+    // }
     ANS_encoder_state = tANS_encode_table[ANS_encoder_state][symbol].next_state;
   }
 
 
   void inline tANS_encode(const tANS_table_t tANS_encode_table[NUM_ANS_STATES][ANS_MAX_SRC_CARDINALITY], uint symbol){
-    #if ANALYSIS_CODE
+    #ifdef ANALYSIS_CODE
       geometric_coder_iters++; // analysis
     #endif
 
     const int num_of_bits = tANS_encode_table[ANS_encoder_state][symbol].bits;
 
     assert(num_of_bits >= 0);
-
+    // if(num_of_bits) {
     const uint BIT_MASK = (1<<num_of_bits)-1;
     // uint BIT_MASK = 0xFF >> (8-num_of_bits);
     push_bits_to_binary_stack( ANS_encoder_state & BIT_MASK,num_of_bits);
+    // }
     ANS_encoder_state = tANS_encode_table[ANS_encoder_state][symbol].next_state;
 
   }
@@ -275,19 +313,30 @@ private:
 
 
   void push_single_bit_to_binary_stack( uint32_t bit ){
-    bit_buffer |= bit << bit_ptr;
+    #if SYMBOL_ENDIANNESS_LITTLE
+    bit_buffer <<= 1;
+    bit_buffer |= bit ;
+    #else
+    bit_buffer |= bit <<bit_ptr;
+    #endif
     bit_ptr += 1;
 
-    if (bit_ptr >= BIT_BUFFER_SIZE){
+    if (unlikely(bit_ptr == BIT_BUFFER_SIZE)){
       // encoded_bit_stack[stack_ptr] =  binary_stack_t((bit_buffer & 0xff) << 8) | ((bit_buffer & 0xff00) >> 8);
-      encoded_bit_stack[stack_ptr] =  binary_stack_t(bit_buffer);
+      // SYMBOL_ENDIANNESS_LITTLE: // no need to shift as bit_ptr == 0
+      binary_stack_t aux = binary_stack_t(bit_buffer); 
+      #if BIT_ENDIANNESS_LITTLE && !SYMBOL_ENDIANNESS_LITTLE
+        aux = __builtin_bitreverse8(aux);
+      #endif
+      encoded_bit_stack[stack_ptr] =  aux;
+      // encoded_bit_stack[stack_ptr] =  binary_stack_t(bit_buffer);
       // encoded_bit_stack[stack_ptr] =  uint8_t(bit_buffer &0xFF);
       bit_ptr = 0;
       bit_buffer =  0;
-      stack_ptr-=sizeof(binary_stack_t);
-      // stack_ptr--;
+      // stack_ptr-=sizeof(binary_stack_t);
+      stack_ptr--;
 
-      if(stack_ptr < 0) {
+      if(unlikely(stack_ptr < 0)) {
         std::cerr<<DBG_INFO<<"ERROR: Stack overflow. MAX_SUPPORTED_BPP ("<<MAX_SUPPORTED_BPP<<
               ") it's not enough. Can't fix this, quiting"<<std::endl;
         throw 1;
@@ -296,20 +345,47 @@ private:
   }
 
   void push_bits_to_binary_stack( uint32_t symbol ,uint num_of_bits ){
-    bit_buffer |= symbol << bit_ptr;
+
+    #if SYMBOL_ENDIANNESS_LITTLE
+    bit_buffer <<= num_of_bits;
+    bit_buffer |=  symbol ;
+    #else
+    bit_buffer |=  symbol << bit_ptr;
+    #endif
     bit_ptr += num_of_bits;
 
-    if (bit_ptr >= BIT_BUFFER_SIZE){
-      encoded_bit_stack[stack_ptr] =  binary_stack_t(bit_buffer);
+    assert(bit_ptr<=sizeof(bit_buffer)*8);
+
+    #if BIT_BUFFER_SIZE > LOG2_NUM_ANS_STATES
+      if (unlikely(bit_ptr >= BIT_BUFFER_SIZE)){ 
+    #else
+      while (unlikely(bit_ptr >= BIT_BUFFER_SIZE)){ 
+    #endif
       bit_ptr -= BIT_BUFFER_SIZE;
+
+      #if SYMBOL_ENDIANNESS_LITTLE
+      binary_stack_t aux = binary_stack_t((bit_buffer>>bit_ptr));
+      #else
+      binary_stack_t aux = binary_stack_t(bit_buffer);
+        #if BIT_ENDIANNESS_LITTLE 
+          aux = __builtin_bitreverse8(aux);
+        #endif
       bit_buffer >>=BIT_BUFFER_SIZE;
-      stack_ptr-=sizeof(binary_stack_t);
-      if(stack_ptr < 0) {
+      #endif
+
+      encoded_bit_stack[stack_ptr] =  aux;
+      // encoded_bit_stack[stack_ptr] =  binary_stack_t(bit_buffer);
+
+      // stack_ptr-=sizeof(binary_stack_t);
+      stack_ptr--;
+
+      if(unlikely(stack_ptr < 0)) {
         std::cerr<<DBG_INFO<<"ERROR: Stack overflow. MAX_SUPPORTED_BPP ("<<MAX_SUPPORTED_BPP<<
               ") it's not enough. Can't fix this, quiting"<<std::endl;
         throw 1;
       }
     }
+
   } 
 
   void  write_byte_in_binary(uint32_t byte  ){
@@ -318,22 +394,42 @@ private:
   }
 
   void store_binary_stack(){
+    uint extra_bytes = 0;
+    
     if(bit_ptr != 0) {
       // encoded_bit_stack[stack_ptr] = binary_stack_t((bit_buffer & 0xff) << 8) | ((bit_buffer & 0xff00) >> 8);
-      encoded_bit_stack[stack_ptr] = binary_stack_t(bit_buffer) ;
+      #if SYMBOL_ENDIANNESS_LITTLE
+      binary_stack_t aux = binary_stack_t(bit_buffer<<(BIT_BUFFER_SIZE-bit_ptr));
+      #else
+      binary_stack_t aux = binary_stack_t(bit_buffer);
+        #if BIT_ENDIANNESS_LITTLE 
+          aux = __builtin_bitreverse8(aux);
+        #endif
+      #endif
+      encoded_bit_stack[stack_ptr] =  aux;
+      // encoded_bit_stack[stack_ptr] =  binary_stack_t(bit_buffer);
+      extra_bytes = 4-((bit_ptr+7)>>3);
+      // stack_ptr--; 
+      // extra_bytes = 0;
+      assert(extra_bytes <= sizeof(binary_stack_t));
       bit_buffer = 0;
       bit_ptr = 0;
 
-      BUILD_BUG_ON(sizeof(binary_stack_t) > 1);
+      // BUILD_BUG_ON(sizeof(binary_stack_t) > 1);
       //   Currently sizeof(binary_stack_t) > 1 is not supported
       //   need to check how many bytes are added here 
       //   Also, endianness should be taken into account
     }else{
-      stack_ptr++;
+      stack_ptr++; 
     }
-
-    const int bytes_in_stack = (STACK_PTR_INIT - stack_ptr +1)*sizeof(binary_stack_t);
-    memcpy(out_file+file_size,encoded_bit_stack + stack_ptr,bytes_in_stack);
+    const int bytes_in_stack = (STACK_PTR_INIT - stack_ptr +1)*sizeof(binary_stack_t)
+                              - extra_bytes;
+    uint8_t * first_byte = (uint8_t *)(encoded_bit_stack+stack_ptr) + extra_bytes;
+    // const int bytes_in_stack = (STACK_PTR_INIT - stack_ptr +1)*sizeof(binary_stack_t)
+    //                           + 0;
+    // auto first_byte = encoded_bit_stack+stack_ptr;
+    memcpy(out_file+file_size,first_byte,bytes_in_stack);
+    // memcpy(out_file+file_size,encoded_bit_stack + stack_ptr,bytes_in_stack);
 
     file_size += bytes_in_stack;
     stack_ptr = STACK_PTR_INIT;
@@ -363,6 +459,7 @@ check_update_block();
 
 */
 
+
   #define ANS_SYMBOL 0
   #define ANS_PREV_STATE 1
 class Binary_Decoder
@@ -371,34 +468,89 @@ class Binary_Decoder
   uint remaining_symbols; // remaining symbols excluding those in the current block
   uint blk_rem_symbols;  // remaining symbols in current decoding block
 
-  unsigned char* block_binary;
+  binary_stack_t * block_binary;
   size_t binary_file_ptr;
-  int bit_ptr;
-  #define bit_ptr_init (7)
+  bit_buffer_t binary_buffer;
+  int bit_ptr; // number of bits already read from the binary_buffer
+  static constexpr int BINARY_BLOCK_BYTES =  sizeof(*block_binary);
+  static constexpr int BINARY_BLOCK_BITS =  BINARY_BLOCK_BYTES*8;
+  #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+    static constexpr int bit_ptr_init = 0;
+  #else
+    static constexpr int bit_ptr_init = BINARY_BLOCK_BYTES*8-1;
+  // #define bit_ptr_init (7)
+  #endif
+
 
 
 public:
-  Binary_Decoder(unsigned char* _block_binary,uint total_symbs):
-      block_binary(_block_binary),binary_file_ptr(0),bit_ptr(bit_ptr_init),
-      is_ANS_ready(false),ANS_decoder_state(0){
+  Binary_Decoder(void* _block_binary,uint total_symbs):
+      block_binary(decltype(block_binary)( _block_binary)),
+      #if BIT_ENDIANNESS_LITTLE ||SYMBOL_ENDIANNESS_LITTLE
+      binary_file_ptr(2), // 2 cause binary_buffer is initialized with the first 2 elements
+      #else
+      binary_file_ptr(0),
+      #endif 
+      bit_ptr(bit_ptr_init),is_ANS_ready(false),ANS_decoder_state(0){
     // TODO should be using the buffer size stated in the global header, not EE_BUFFER_SIZE
-    blk_rem_symbols = total_symbs < EE_BUFFER_SIZE? total_symbs : EE_BUFFER_SIZE;
+    blk_rem_symbols = total_symbs < EE_BUFFER_SIZE? total_symbs : EE_BUFFER_SIZE +1;
     remaining_symbols = total_symbs - blk_rem_symbols;
+    binary_buffer = decltype(binary_buffer)(block_binary[1])<<BINARY_BLOCK_BITS | block_binary[0];
   }
 
   ~Binary_Decoder(){};
   
-  unsigned char retrive_pixel(){
-    unsigned char symbol = get_byte();
+  unsigned int retrive_pixel(int bits){
+    unsigned int symbol;
+    assert(bits<=16);
+
+    if (bits <=8){
+      symbol = get_byte();
+    }else{
+      symbol = get_byte();
+      symbol |= get_byte()<<8;
+    }
+
     blk_rem_symbols--;
     check_update_block();
     return symbol;
   }
 
-  int retrive_bits(int num_of_bits ){
+  #if SYMBOL_ENDIANNESS_LITTLE
+  /* int retrive_bits(int num_of_bits ){
     int bit_buffer = 0;
     for(int i = 0; i < num_of_bits; ++i) {
-      bit_buffer *=2;
+      // bit_buffer <<= 1;
+      bit_buffer |= get_bit()<<i;
+    }
+
+    // blk_rem_symbols--;
+    // check_update_block();
+    return bit_buffer;
+    
+  }*/
+
+
+  // this function can be optimize pointing directly to 
+  // the binary and removing the if 
+  int retrive_bits(int num_of_bits ){
+    unsigned int bits = (binary_buffer>>bit_ptr) & ((1<<num_of_bits)-1) ;
+    bit_ptr+=num_of_bits;
+
+    if(unlikely(bit_ptr >= BINARY_BLOCK_BITS)) {
+      binary_buffer >>= BINARY_BLOCK_BITS;
+      binary_buffer |= decltype(binary_buffer)(block_binary[binary_file_ptr])<<BINARY_BLOCK_BITS;
+      bit_ptr -= BINARY_BLOCK_BITS;
+      binary_file_ptr++;
+    }
+
+    return bits;
+  }
+  #else
+  inline int retrive_bits(int num_of_bits ){
+    int bit_buffer = 0;
+    for(int i = 0; i < num_of_bits; ++i) {
+      bit_buffer <<= 1;
       bit_buffer |= get_bit();
     }
 
@@ -407,6 +559,7 @@ public:
     return bit_buffer;
     
   }
+  #endif
 
   int retrive_TSG_symbol(int theta_id, int p_id, uint escape_bits, int &z, int &y){  
     // z first and y second
@@ -420,18 +573,84 @@ public:
 private:
 
   // operations on binary file
-    inline unsigned char get_byte(){
-      if(unlikely(bit_ptr != bit_ptr_init)) {
+    inline unsigned int get_byte(){
+      #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+        if(unlikely((bit_ptr& 7) != 0)) {
+      #else
+        if(unlikely(bit_ptr != bit_ptr_init)) {
+      #endif
         std::cerr<<DBG_INFO<<" Warning: previous byte was being read. bit_ptr: "<<bit_ptr<<std::endl;
-        binary_file_ptr ++; //go to next byte, discarding current
+
+        //go to next byte, discarding current
+
+        // #if BIT_ENDIANNESS_LITTLE 
+        #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+
+          bit_ptr &= -8; // set lower bits to 0
+          bit_ptr += 8;  // go to next byte
+          if(bit_ptr >= BINARY_BLOCK_BITS) {
+            binary_buffer >>= BINARY_BLOCK_BITS;
+            binary_buffer |= decltype(binary_buffer)(block_binary[binary_file_ptr])<<BINARY_BLOCK_BITS;
+            bit_ptr = bit_ptr_init;
+            binary_file_ptr++;
+          }
+        #else
+          binary_file_ptr ++; 
+        #endif
       }
-      unsigned char symbol = block_binary[binary_file_ptr];
-      binary_file_ptr ++;
+      unsigned int symbol;
+      #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+        symbol = (binary_buffer>>bit_ptr) & 0xFF;
+        bit_ptr += 8;
+        if(bit_ptr >= BINARY_BLOCK_BITS) {
+          binary_buffer >>= BINARY_BLOCK_BITS;
+          binary_buffer |= decltype(binary_buffer)(block_binary[binary_file_ptr])<<BINARY_BLOCK_BITS;
+          bit_ptr = bit_ptr_init;
+          binary_file_ptr++;
+        }
+      #else
+        symbol = block_binary[binary_file_ptr];
+        binary_file_ptr ++;
+      #endif
       return symbol;
     }
 
-    inline unsigned char get_bit(){
-      unsigned char bit = block_binary[binary_file_ptr] & (1 << bit_ptr);
+    inline unsigned int get_bit(){
+      #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+      unsigned int bit = (binary_buffer>>bit_ptr) & 1 ;
+      #else
+      unsigned int bit = (block_binary[binary_file_ptr]>>bit_ptr) & 1 ;
+      #endif
+      //
+      // unsigned int bit = block_binary[binary_file_ptr] & (1 << bit_ptr);
+      // bit >>= bit_ptr;
+      // 
+      // bit = bit != 0? 1 : 0;
+
+      #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+      bit_ptr++;
+      #else
+      bit_ptr--;
+      #endif
+
+      #if BIT_ENDIANNESS_LITTLE || SYMBOL_ENDIANNESS_LITTLE
+        if(bit_ptr >= BINARY_BLOCK_BITS) {
+          binary_buffer >>= BINARY_BLOCK_BITS;
+          binary_buffer |= decltype(binary_buffer)(block_binary[binary_file_ptr])<<BINARY_BLOCK_BITS;
+          bit_ptr = bit_ptr_init;
+          binary_file_ptr++;
+        }
+      #else
+        if(bit_ptr < 0) {
+          bit_ptr = bit_ptr_init;
+          binary_file_ptr++;
+        }
+      #endif
+      return bit;
+    }
+
+    /*inline unsigned int get_bit(){
+      unsigned int bit = block_binary[binary_file_ptr] & (1 << bit_ptr);
       bit = bit != 0? 1 : 0;
       bit_ptr--;
       if(bit_ptr < 0) {
@@ -439,7 +658,7 @@ private:
         binary_file_ptr++;
       }
       return bit;
-    }
+    }*/
 
 
 
@@ -452,11 +671,16 @@ private:
       tANS_finish_block();
       blk_rem_symbols = remaining_symbols < EE_BUFFER_SIZE? remaining_symbols : EE_BUFFER_SIZE;
       remaining_symbols -= blk_rem_symbols;
+      if(remaining_symbols) {
+        init_ANS();
+      }
     }
   }
 
+  // This function can be optimized using a lut to get the number of new
+  // bits to read from the input binary
   auto tANS_z_decoder(uint mode){
-    static const int32_t tANS_z_decode_table[NUM_ANS_THETA_MODES][NUM_ANS_STATES][2]{
+    static const uint8_t tANS_z_decode_table[NUM_ANS_THETA_MODES][NUM_ANS_STATES][2]{
        #include "ANS_tables/tANS_z_decoder_table.dat"
       }; // [0] number of bits, [1] next state
     assert((ANS_decoder_state >= ANS_I_RANGE_START));
@@ -465,16 +689,31 @@ private:
     ANS_decoder_state = tANS_z_decode_table[mode][tANS_table_idx][ANS_PREV_STATE];
     assert((symbol >= 0));
 
-    while(ANS_decoder_state < ANS_I_RANGE_START) {
-      ANS_decoder_state *=2; // OPT: left shift
-      ANS_decoder_state |=  get_bit();
-    }
+    #if SYMBOL_ENDIANNESS_LITTLE
+      // This can be done cause ANS_I_RANGE_START = 2^int
+      int new_bits = 0;
+      assert(ANS_decoder_state!=0);
+      while(ANS_decoder_state < ANS_I_RANGE_START) {
+        ANS_decoder_state <<=1; 
+        new_bits++;
+      }
+      if(new_bits) {
+        ANS_decoder_state |= retrive_bits(new_bits);
+      }
+    #else
+      while(ANS_decoder_state < ANS_I_RANGE_START) {
+        ANS_decoder_state *=2; // OPT: left shift
+        ANS_decoder_state |=  get_bit();
+      }
+    #endif
 
     return symbol;
   }
 
+  // This function can be optimized using a lut to get the number of new
+  // bits to read from the input binary
   auto tANS_y_decoder(uint mode){
-    static const int32_t tANS_y_decode_table[NUM_ANS_P_MODES][NUM_ANS_STATES][2]{
+    static const uint8_t tANS_y_decode_table[NUM_ANS_P_MODES][NUM_ANS_STATES][2]{
         #include "ANS_tables/tANS_y_decoder_table.dat"
       }; // [0] number of bits, [1] next state
 
@@ -484,22 +723,41 @@ private:
     ANS_decoder_state = tANS_y_decode_table[mode][tANS_table_idx][ANS_PREV_STATE];
     assert((symbol >= 0));
 
-    while(ANS_decoder_state < ANS_I_RANGE_START) {
-      ANS_decoder_state *=2; // OPT: left shift
-      ANS_decoder_state |=  get_bit();
-    }
+    #if SYMBOL_ENDIANNESS_LITTLE
+      int new_bits = 0;
+      // This can be done cause ANS_I_RANGE_START = 2^int
+      assert(ANS_decoder_state!=0);
+      while(ANS_decoder_state < ANS_I_RANGE_START) {
+        ANS_decoder_state <<=1; 
+        new_bits++;
+      }
+      if(new_bits) {
+        ANS_decoder_state |= retrive_bits(new_bits);
+      }
+    #else
+      while(ANS_decoder_state < ANS_I_RANGE_START) {
+        ANS_decoder_state *=2; // OPT: left shift
+        ANS_decoder_state |=  get_bit();
+      }
+    #endif
+
 
     return symbol;
   }
 
   void init_ANS(){
     while(get_bit() == 0); // remove bit padding
+    #if SYMBOL_ENDIANNESS_LITTLE
+    ANS_decoder_state = 1<< tANS_STATE_SIZE;
+    ANS_decoder_state |= retrive_bits(tANS_STATE_SIZE);
+    #else
     ANS_decoder_state = 1; // 1 because i have just removed the bit marker
     for(unsigned i = 0; i < tANS_STATE_SIZE; ++i) {
-      ANS_decoder_state *=2;
+      ANS_decoder_state <<=1;
       ANS_decoder_state |= get_bit();
     }
-
+    #endif
+    
     is_ANS_ready = true;
   }
 
@@ -507,26 +765,27 @@ private:
     if(unlikely((ANS_decoder_state != ANS_I_RANGE_START))){
       std::cerr<<"Error: ANS decoder state("<<ANS_decoder_state 
             <<") should be zero at the end of the block"<<std::endl;
+      throw 1;
     }
     ANS_decoder_state = 0;
     is_ANS_ready = false;
   }
 
   int Bernoulli_decoder(uint p_id){
-    bool invert_y = false;
     #if !HALF_Y_CODER
-    if(unlikely(p_id >= CTX_NT_HALF_IDX)) {
-      invert_y = true;
-      #if CTX_NT_CENTERED_QUANT
-        if(p_id == CTX_NT_HALF_IDX) {
-          return get_bit();
-        }
+      bool invert_y = false;
+      if(unlikely(p_id >= CTX_NT_HALF_IDX)) {
+        invert_y = true;
+        #if CTX_NT_CENTERED_QUANT
+          if(p_id == CTX_NT_HALF_IDX) {
+            return get_bit();
+          }
 
-        p_id = CTX_NT_QUANT_BINS - p_id;
-      #else
-        p_id = CTX_NT_QUANT_BINS-1 - p_id;
-      #endif
-    }
+          p_id = CTX_NT_QUANT_BINS - p_id;
+        #else
+          p_id = CTX_NT_QUANT_BINS-1 - p_id;
+        #endif
+      }
     #endif
 
     int ans_symb = tANS_y_decoder( p_id);
@@ -549,7 +808,7 @@ private:
 
     int it = 1;
     while(ans_symb >= encoder_cardinality){
-      if(it >= EE_MAX_ITERATIONS) {
+      if(it >= EE_MAX_ITERATIONS) { // unlikely
         module = retrive_bits(escape_bits);
         break;
       }

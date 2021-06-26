@@ -28,8 +28,8 @@
 *##################   Codec commons  ########################
 */
 
-  inline unsigned char clamp(int v){  //cv::saturate_cast<uchar>
-    return (unsigned char)((unsigned)v <= 255 ? v : v > 0 ? 255 : 0);
+  inline unsigned int clamp(int v, unsigned MAXVAL = 255){  //cv::saturate_cast<uchar>
+    return (unsigned int)((unsigned)v <= MAXVAL ? v : v > 0 ? MAXVAL : 0);
   }
 
 
@@ -86,18 +86,34 @@
 
     return num_symb;
   }
-  inline unsigned char get_value( RowBuffer &src,int row, int col, int channel=0){
-    return src.retrieve( row,col);
-  }
+  // inline unsigned int get_value( RowBuffer &src,int row, int col, int channel=0){
+  //   return src.retrieve( row,col);
+  // }
 
-  inline unsigned char get_value(const cv::Mat &src,int row, int col, int channel){
-    return src.data[src.step[0]*row+src.step[1]*col+channel];
-  }
+  // inline unsigned int get_value(const cv::Mat &src,int row, int col, int channel){
+  //   return src.data[src.step[0]*row+src.step[1]*col+channel];
+  // }
 
-  inline unsigned char get_value(const cv::Mat &src,int row, int col){
+  inline unsigned int get_value(const cv::Mat &src,int row, int col){
     return src.data[src.step[0]*row+src.step[1]*col];
   }
 
+  // inline unsigned int get_value_16(const cv::Mat &src,int row, int col, int channel){
+  //   return src.at<unsigned>(row,col)[channel];
+  // }
+
+  inline unsigned int get_value_16(const cv::Mat &src,int row, int col){
+    return src.at<unsigned short>(row,col);
+  }
+
+
+  inline void set_value(cv::Mat &src,int row, int col, int value){
+    src.data[src.step[0]*row+src.step[1]*col]=value;
+  }
+
+  inline void set_value_16(cv::Mat &src,int row, int col, int value){
+    src.at<unsigned short>(row,col)=value;
+  }
 
 /*
 *##################   quality_measures  ########################

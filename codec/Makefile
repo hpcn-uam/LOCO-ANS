@@ -1,11 +1,20 @@
 
-all: loco_ans_codec
+all: release
+CFLAGS = -Wall -std=c++14 $(sources) `pkg-config --cflags  opencv`
 
-# LIBS := -lopencv_highgui -lopencv_imgcodecs -lopencv_core -lopencv_imgproc
 sources :=  $(wildcard src/*.cc)
 deps  := $(wildcard src/*.cc) $(wildcard src/*.h) $(wildcard src/ANS_tables/*.dat )
+
+
+debug: CFLAGS += -g -DDEBUG -DANALYSIS_CODE
+debug: loco_ans_codec
+
+release: CFLAGS += -DNDEBUG -O3
+release: loco_ans_codec
+
+
 loco_ans_codec: $(deps)
-	g++   -Wall -std=c++14 -o "$@" $(sources) `pkg-config --cflags --libs  opencv` -O3 
+	g++ $(CFLAGS)  -o "$@"  `pkg-config  --libs  opencv`
 
 clean:
 	rm -f loco_ans_codec

@@ -5,15 +5,12 @@ import Quantization_functions as qfunc # my quantization functions
 import numpy as np
 
 
-template_config = """/*
- *
- *      Author: Tobías Alonso
- */
-
+template_config = """
 #ifndef CODER_CONFIG_H
 #define CODER_CONFIG_H
 
-#include "codec_core.h"
+
+#define ADD_GRAD_4 ($ADD_GRAD_4$)
 
 //quantizers
 #define CTX_ST_FINER_QUANT ($CTX_ST_FINER_QUANT$) 
@@ -29,12 +26,14 @@ template_config = """/*
 #define EE_MAX_ITERATIONS ($EE_MAX_ITERATIONS$)
 #define EE_BUFFER_SIZE ($EE_BUFFER_SIZE$)
 
-#define NUM_ANS_THETA_MODES ($NUM_ANS_THETA_MODES$) // supported theta_modes
-#define NUM_ANS_P_MODES ($NUM_ANS_P_MODES$) // supported p_modes
-#define NUM_ANS_STATES ($NUM_ANS_STATES$)// NUM_ANS_STATES only considers I range
+#define NUM_ANS_THETA_MODES ($NUM_ANS_THETA_MODES$)//16 // supported theta_modes
+#define NUM_ANS_P_MODES ($NUM_ANS_P_MODES$) //16 //32 // supported theta_modes
+#define LOG2_NUM_ANS_STATES ($ANS_STATE_SIZE$)
+#define NUM_ANS_STATES (1<<LOG2_NUM_ANS_STATES)  // NUM_ANS_STATES only considers I range
 
 $CARDINALITY_ARRAYS$
 
+#define ARCH ($SYS_ARCH$)
 #endif
 """
 
@@ -82,8 +81,6 @@ def get_St_modes_const_ratio(St_PRECISION,MAX_ST):
 
 def get_St_modes_const_ratio_uniform_1(St_PRECISION,MAX_ST):
     ''' Simple function to get theta reconstruction values.
-        Takes get_St_modes_const_ratio quantization bins, and
-        divides them in 2 (equal size)
     '''
     
     t = 100
@@ -127,6 +124,32 @@ def round_to_fixed_bits(num, num_of_bits):
     sign = 1 if num >=0 else -1
     return round(num*factor-sign*EP)/factor
 
+
+# needs to be updates to the new St estimation
+def get_alpha_abs_error_mapping_lut():
+    Alphas = range(1,24)
+    b_calc = [0.1250,.25, 0.3750 , 0.5, 0.6250,0.75,0.8750, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10, 12, 14, 16]
+
+
+    beq_LUT = [[-1 for b in b_calc] for a in Alphas]
+    for a_id,alpha in enumerate(Alphas):
+        for b_id,b in enumerate(b_calc):
+
+            ee_b_id =  get_ee_b_id(b/alpha)
+            beq_LUT[a_id][b_id]= ee_b_id
+
+
+    out_format = "{:" + str(4) +"d}"
+
+    # print(LUT)
+    # print("const static uint8_t ctx_b_values[{}] = {{ \n\t".format(len(b_calc)),end="")
+    print("       //","".join(("{:>"+str(4)+ "s}|").format(str(a)[1:] if a < 1  else str(a)) for a in b_calc)," <-- b") 
+    alpha_names = [str(x) for x in Alphas]
+    get_2d_c_array(beq_LUT,name = "static const uint8_t beq_LUT",format_funt=out_format.format,row_name=alpha_names)
+    
+    
+    
+    
 
 
 def get_symbol_src_geo(theta,max_code_len,max_symbols,just_pow_of_2 = True,min_symbols = 2):
@@ -241,6 +264,36 @@ def store_adaptative_ANS_encoding_tables(output_encoder_file,encoding_array,ec_m
             else:
                 file.write("}\n")
 
+def store_adaptative_ANS_encoding_tables_D1(output_encoder_file,encoding_array,ec_modes):
+    ANS_states = len(encoding_array[0])
+    ANS_symbols = len(encoding_array[0][0])
+    ANS_modes = len(ec_modes)
+    
+    state_digits = int(np.ceil(np.log10(ANS_states)))
+    out_bit_digits = int(np.ceil(np.log10(np.ceil(np.log2(ANS_states)))))
+    entry_format="{:"+str(state_digits)+"d}, {:"+str(out_bit_digits)+"d}"
+    with open(output_encoder_file,'w') as file:
+        for mode_id,mode_parameter in ec_modes.items():
+            file.write(" // mode: {:d} | param: {:8.6f} \n".format(mode_id,mode_parameter))
+            for state in range(ANS_states):    
+#                 file.write("{") 
+                for symbol in range(ANS_symbols):
+                    new_state = encoding_array[mode_id][state][symbol][0]
+                    num_out_bits = encoding_array[mode_id][state][symbol][1]
+                    file.write(entry_format.format(new_state,num_out_bits) ) 
+
+                    if symbol < ANS_symbols-1:
+                        file.write(", ") 
+
+                if state < (ANS_states - 1):
+                    file.write(", // state: {}\n".format(state))
+                else:
+                    file.write("  // state: {}\n".format(state))
+
+            if mode_id < (ANS_modes - 1):
+                file.write(", ") 
+            else:
+                file.write("\n")
 
 def store_adaptative_ANS_decoding_tables(output_decoder_file,decoding_array,ec_modes):
     ANS_states = len(decoding_array[0])
@@ -269,11 +322,12 @@ def store_adaptative_ANS_decoding_tables(output_decoder_file,decoding_array,ec_m
                 
                 
                 
-def get_cardinality_array(ec_modes,max_code_len,max_symbols):
+def get_cardinality_array(ec_modes,max_code_len,max_symbols,available_bit_sizes=None):
     b_address_size = 5
     type_idx = 0 # 8
     pow_of_2_size = True
-    available_bit_sizes = [8,16,32,64]
+    if available_bit_sizes is None:
+        available_bit_sizes = [8,16,32,64]
 
 
     table_data_type_bits = available_bit_sizes[type_idx]
@@ -314,15 +368,22 @@ def get_cardinality_array(ec_modes,max_code_len,max_symbols):
 
     for mode_id,mode_parameter in ec_modes.items():
         idx= mode_id
+#         print(mode_parameter,": ",cardinality_table[idx])
 
-    assert table_data_type_bits in [8,16,32,64]
-
+    assert table_data_type_bits in [8,16,32,64], "Need to change uint8_t type used for tANS_cardinality_table array"
+#     print("static const uint{}_t tANS_cardinality_table[{}] = {{".format(table_data_type_bits,table_size))
+#     print("\t",",".join(str(c) for c in  cardinality_table),end="};\n")
+    
+#     print("")
+#     print("static const int32_t max_module_per_cardinality_table[{}] = {{".format(table_size))
+#     print("\t",",".join(str(c)+'*EE_MAX_ITERATIONS' for c in  cardinality_table),end="};\n")
+    
     
     out_string ="static const uint{}_t tANS_cardinality_table[{}] = {{".format(table_data_type_bits,table_size)
     out_string +="\t"+",".join(str(c) for c in  cardinality_table)+"};\n"
 
     out_string +=""
-    out_string +="static const int32_t max_module_per_cardinality_table[{}] = {{".format(table_size)
+    out_string +="static const uint32_t max_module_per_cardinality_table[{}] = {{".format(table_size)
     out_string +="\t"+",".join(str(c)+'*EE_MAX_ITERATIONS' for c in  cardinality_table)+"};\n"
     return out_string
 

@@ -21,22 +21,13 @@
 
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
 
 #include <iostream>
 #include <string>
-#include <fstream>
 #include <algorithm>
-#include <iomanip>
 #include <cstdlib>
-#include <libgen.h>
-//#include <filesystem>
 
 #include "codec.h"
-
-#define DEBUG false
-#define DECODE true
-#define SHOW false
 
 #include <sys/time.h>
 
@@ -48,7 +39,7 @@ int main(int arg, char** argv ){
   int encode_mode=ENCODER_MODE_ENCODE; //default
   int encode_prediction =ENCODER_PRED_LOCO; //default (deprecated)
   int NEAR =0; //default lossless
-
+  int ibpp =8;
   if( arg < 3) {
     printf("Args: encode(0)/decode(1) args \n");
     printf("Encode args: 0 src_img_path out_compressed_img_path [NEAR] [encode_mode] [blk_height]  [blk_width]   \n");
@@ -69,6 +60,13 @@ int main(int arg, char** argv ){
       return 2;
     }
 
+    if (img_orig.type() == CV_8UC1){
+      ibpp=8;
+    }else{
+      std::cout<< "input has to be either a 8 or 16 bit gray image"<<std::endl;
+      return -1;
+    }
+
     int blk_height=img_orig.rows;
     int blk_width=img_orig.cols;
 
@@ -77,25 +75,16 @@ int main(int arg, char** argv ){
     }
 
     if (arg>5) {
-  		encode_mode= atoi(argv[5]);
-  	}
+      encode_mode= atoi(argv[5]);
+    }
 
-    if (arg>6) {
+    if (arg>6 && (atoi(argv[6])>0) ) {
       blk_height = atoi(argv[6]);
     }
 
-    if (arg>7) {
+    if (arg>7 && (atoi(argv[7])>0) ) {
       blk_width = atoi(argv[7]);
     }
-
-
-    /*if (arg>8) {
-      encode_prediction= atoi(argv[8]);
-    }
-
-    if (arg>9) {
-	 	 chroma_mode= atoi(argv[9]); 
-    }*/
 
     std::cout<<" Encoder configuration ";
     std::cout<<"| NEAR: "<<NEAR; 
@@ -104,34 +93,24 @@ int main(int arg, char** argv ){
     if(encode_mode != ENCODER_MODE_ENCODE) {
       std::cout<<"| encode_mode: "<<encode_mode;
     }
-    // std::cout<<"| encode_prediction: "<<encode_prediction;
     std::cout<< std::endl;
-
-
  
     if(NEAR < 0) {
-      std::cerr<<" Error NEAR should be >= 0"<<std::endl;
+      std::cerr<<" Error: NEAR should be >= 0"<<std::endl;
       return 1;
     }
 
-
-
-    std::string csv_prefix;
-
-    if(img_orig.channels()== 3 && chroma_mode == CHROMA_MODE_GRAY){ //I assume it's RGB image 
-      std::cout<<"Warning: Selected chrominance mode: Gray, but source image has 3 channels. Converting to 1 channel image"<<std::endl;
-      rgb2yuv(img_orig, img_orig,CHROMA_MODE_GRAY);
-    }
-    
   //encode
-    struct timeval fin,ini;
-    gettimeofday(&ini,NULL);
-    int compress_img_size=encoder(img_orig,out_file,blk_width,blk_height,
-                    chroma_mode,encode_prediction,NEAR,
-                                        encode_mode ,csv_prefix);
-    gettimeofday(&fin,NULL);
+    timespec fin,ini;
+    int compress_img_size;
+    clock_gettime(CLOCK_MONOTONIC, &ini);
+    compress_img_size=encoder(img_orig,out_file,blk_width,blk_height,
+                    chroma_mode,encode_prediction,NEAR,encode_mode,ibpp);
+    clock_gettime(CLOCK_MONOTONIC, &fin);
 
-    printf("Encoder time: %.3f | ", ((fin.tv_sec*1000000+fin.tv_usec)-(ini.tv_sec*1000000+ini.tv_usec))*1.0/1000000.0);
+    float enc_time = ((fin.tv_sec+fin.tv_nsec* 1E-9)-(ini.tv_sec+ini.tv_nsec* 1E-9));
+    float enc_bw = img_orig.cols*img_orig.rows/(1024*1024*enc_time);
+    printf("Encoder time: %.3f | BW: %.3f MP/s |", enc_time,enc_bw );
     printf(" Achieved bpp: %.3f \n",float(compress_img_size*8)/(img_orig.cols*img_orig.rows));
     if (compress_img_size<0){
       std::cerr<<"there's been an error in trying to encode the image"<<std::endl;
@@ -145,11 +124,17 @@ int main(int arg, char** argv ){
     std::cout<<"Out decoded image path: "<<out_path<<std::endl;
 
     cv::Mat decode_img;
-    struct timeval fin,ini;
-    gettimeofday(&ini,NULL);
-    int deco_status = decoder(compressed_img,decode_img);
-    gettimeofday(&fin,NULL);
-    printf("Decoder time: %.3f\n", ((fin.tv_sec*1000000+fin.tv_usec)-(ini.tv_sec*1000000+ini.tv_usec))*1.0/1000000.0);
+    // struct timeval fin,ini;
+    timespec fin,ini;
+    bool scale_depth = true;
+    // gettimeofday(&ini,NULL);
+    clock_gettime(CLOCK_MONOTONIC, &ini);
+    int deco_status = decoder(compressed_img,decode_img,scale_depth);
+    clock_gettime(CLOCK_MONOTONIC, &fin);
+    // gettimeofday(&fin,NULL);
+    float dec_time = ((fin.tv_sec+fin.tv_nsec* 1E-9)-(ini.tv_sec+ini.tv_nsec* 1E-9));
+    float dec_bw = decode_img.cols*decode_img.rows/(1024*1024*dec_time);
+    printf("Decoder time: %.3f | BW: %.3f MP/s \n", dec_time,dec_bw );
 
     if (deco_status)
     {
