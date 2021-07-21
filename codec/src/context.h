@@ -459,7 +459,7 @@ void update_context(Context_t ctx, int prediction_error,int z, int y){
   // adjust
     if(unlikely(cnt >= CTX_ADJUST_CNT )) { 
       cnt >>=1;
-      acc >>=1;  
+      acc = (acc >= 0)? (acc >> 1): -((1 - acc) >> 1);  
       Nt  >>=1;
       St  >>=1;
     }    
