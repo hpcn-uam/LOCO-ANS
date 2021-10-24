@@ -1,6 +1,6 @@
 # LOCO-ANS CODEC 
 
-![alt text](results_images/loco_ans_diagram.svg "LOCO-ANS block diagram")
+![alt text](results_images/loco_ans_diagram.png "LOCO-ANS block diagram")
 
 This repository contains the source code resulting from the development of an ANS based coder for JPEG-LS.
 
