@@ -13,7 +13,7 @@ Our results also show that LOCO-ANS compares favorably against state-of-the-art 
 ## Publication
 This work has an associated publication (currently under revision):
 
-Title: "LOCO-ANS: An optimization of JPEG-LS using anefficient and low complexity coder based on ANS"
+Title: "LOCO-ANS: An optimization of JPEG-LS using an efficient and low complexity coder based on ANS"
 
 Authors: Tobías Alonso, Gustavo Sutter, and Jorge E. López de Vergara
 
