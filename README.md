@@ -1,5 +1,7 @@
 # LOCO-ANS CODEC 
 
+![alt text](results_images/loco_ans_diagram.svg "LOCO-ANS block diagram")
+
 This repository contains the source code resulting from the development of an ANS based coder for JPEG-LS.
 
 In this work we propose enhancements to the JPEG-LS standard, aimed at improving its coding efficiency at a low computational overhead, particularly for hardware implementations. 
@@ -9,13 +11,13 @@ Additional improvements are achieved increasing the context size and image tilin
 Our results also show that LOCO-ANS compares favorably against state-of-the-art codecs like JPEG-XL and WebP, particularly in near-lossless, where it achieves higher compression ratios with a faster coding speed.
 
 ## Publication
-This work has an associated publication:
+This work has an associated publication (currently under revision):
 
 Title: "LOCO-ANS: An optimization of JPEG-LS using anefficient and low complexity coder based on ANS"
 
 Authors: Tobías Alonso, Gustavo Sutter, and Jorge E. López de Vergara
 
-[IEEE ACCESS publication](https://ieeexplore.ieee.org/document/9499046)
+Submitted to IEEE Access
 
 
 ## Contents:
