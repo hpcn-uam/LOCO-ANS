@@ -9,13 +9,13 @@ Additional improvements are achieved increasing the context size and image tilin
 Our results also show that LOCO-ANS compares favorably against state-of-the-art codecs like JPEG-XL and WebP, particularly in near-lossless, where it achieves higher compression ratios with a faster coding speed.
 
 ## Publication
-This work has an associated publication (currently under revision):
+This work has an associated publication:
 
 Title: "LOCO-ANS: An optimization of JPEG-LS using anefficient and low complexity coder based on ANS"
 
 Authors: Tobías Alonso, Gustavo Sutter, and Jorge E. López de Vergara
 
-Summited to IEEE Access
+[IEEE ACCESS publication](https://ieeexplore.ieee.org/document/9499046)
 
 
 ## Contents:
