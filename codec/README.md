@@ -19,7 +19,7 @@ Args:
 - blk_width (optional. Default: image width) : the image can be coded on blocks blk_width wide
 
 ### Decode 
-command: ./opt_jpegls_codec 1 compressed_img_path path_to_out_image  
+command: ./loco_ans_codec 1 compressed_img_path path_to_out_image  
 
 Args:
 - compressed_img_path: path to input encoded image
